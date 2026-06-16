@@ -16,6 +16,7 @@ https://github.com/hect0x7/JMComic-Crawler-Python
 - 下载完成后自动打包 zip
 - 群聊触发时上传群文件
 - 私聊触发时直接私聊发送 zip 文件
+- 自动同意 QQ 好友申请
 
 原项目 License 为 MIT。请继续遵守原项目许可证和原作者声明。
 
