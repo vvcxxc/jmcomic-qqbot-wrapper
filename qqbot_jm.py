@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 import nonebot
-from nonebot import on_message
-from nonebot.adapters.onebot.v11 import Adapter, Bot, GroupMessageEvent, Message, MessageEvent
+from nonebot import on_message, on_request
+from nonebot.adapters.onebot.v11 import Adapter, Bot, FriendRequestEvent, GroupMessageEvent, MessageEvent
 
 
 ROOT = Path(__file__).resolve().parent
@@ -74,6 +74,16 @@ driver = nonebot.get_driver()
 driver.register_adapter(Adapter)
 
 jm = on_message(priority=10, block=False)
+friend_request = on_request(priority=5, block=False)
+
+
+@friend_request.handle()
+async def handle_friend_request(bot: Bot, event: FriendRequestEvent):
+    await bot.call_api(
+        "set_friend_add_request",
+        flag=event.flag,
+        approve=True,
+    )
 
 
 @jm.handle()
