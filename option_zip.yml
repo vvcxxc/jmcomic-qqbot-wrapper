@@ -1,0 +1,18 @@
+log: true
+
+dir_rule:
+  base_dir: ./downloads
+  rule: Bd / Atitle / Pindex
+
+client:
+  impl: api
+
+plugins:
+  after_album:
+    - plugin: zip
+      kwargs:
+        level: album
+        dir_rule:
+          base_dir: ./downloads
+          rule: Bd / zip / JM{Aid}-{Atitle}.zip
+        delete_original_file: true
