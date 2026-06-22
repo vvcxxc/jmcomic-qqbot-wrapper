@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$root = $PSScriptRoot
+$root = Split-Path $PSScriptRoot -Parent
 $webuiConfig = Join-Path $root "tools\napcat-docker\config\webui.json"
 $token = (Get-Content -Raw $webuiConfig | ConvertFrom-Json).token
 

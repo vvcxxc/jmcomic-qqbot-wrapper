@@ -1,8 +1,9 @@
 $ErrorActionPreference = "Stop"
 
-Set-Location $PSScriptRoot
+$root = Split-Path $PSScriptRoot -Parent
+Set-Location $root
 
-$pidFile = Join-Path $PSScriptRoot "jmcomic-bot.pid"
+$pidFile = Join-Path $root "logs\jmcomic-bot.pid"
 
 if (Test-Path $pidFile) {
   $botPid = Get-Content $pidFile | Select-Object -First 1

@@ -1,0 +1,15 @@
+{
+  "_说明": "掉线告警配置(base)。本文件进仓库,只放结构和默认值,不要填真实密钥。真实密钥写到同目录的 alert_config.local.json(已被 gitignore),它会覆盖这里的同名字段。两个文件都没填好(smtp_user/smtp_pass 为空)时,机器人掉线只记日志、不发邮件。",
+  "_smtp_host说明": "发件邮箱的 SMTP 服务器。QQ邮箱 smtp.qq.com;163 smtp.163.com;Gmail smtp.gmail.com",
+  "_smtp_port说明": "465=SSL(推荐);587=STARTTLS",
+  "_smtp_pass说明": "邮箱的SMTP授权码,不是登录密码。QQ/163 需在邮箱设置里开启SMTP并生成授权码",
+  "_webui_url说明": "NapCat WebUI 地址,填服务器能被你访问到的IP/域名。掉线邮件里会带上它(自动拼 token)让你扫码重登",
+  "smtp_host": "smtp.qq.com",
+  "smtp_port": 465,
+  "smtp_user": "",
+  "smtp_pass": "",
+  "smtp_to": "",
+  "webui_url": "",
+  "min_interval_seconds": 1800,
+  "poll_interval_seconds": 180
+}

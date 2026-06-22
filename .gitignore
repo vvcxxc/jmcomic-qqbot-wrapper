@@ -168,5 +168,4 @@ gemini.md
 # Local bot/runtime files
 logs/
 tools/
-jmcomic-bot.pid
-napcat-qrcode.png
+config/alert_config.local.json

@@ -51,13 +51,13 @@ tail_bot_log.bat
 完整环境、换电脑步骤、脚本说明、常见问题见：
 
 ```text
-QQBOT_SETUP.md
+docs\QQBOT_SETUP.md
 ```
 
 原项目 README 已保留为：
 
 ```text
-README_UPSTREAM.md
+docs\README_UPSTREAM.md
 ```
 
 ## 目录说明
@@ -67,12 +67,14 @@ README_UPSTREAM.md
 ```text
 qqbot_jm.py
 requirements-qqbot.txt
-option_zip.yml
-docker-compose.napcat.yml
+config\option_zip.yml
+config\docker-compose.napcat.yml
+config\alert_config.json
+scripts\
 start_bot_background.bat
 stop_bot_background.bat
 tail_bot_log.bat
-QQBOT_SETUP.md
+docs\QQBOT_SETUP.md
 ```
 
 运行产物不会提交：
@@ -82,8 +84,6 @@ QQBOT_SETUP.md
 downloads
 logs
 tools
-napcat-qrcode.png
-jmcomic-bot.pid
 ```
 
 ## 免责声明

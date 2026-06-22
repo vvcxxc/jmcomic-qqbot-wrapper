@@ -1,22 +1,39 @@
 import asyncio
+import json
 import os
 import re
 import shutil
+import smtplib
 import subprocess
 import sys
+import time
+from email.message import EmailMessage
 from pathlib import Path
 
 import nonebot
-from nonebot import on_message, on_request
-from nonebot.adapters.onebot.v11 import Adapter, Bot, FriendRequestEvent, GroupMessageEvent, MessageEvent
+from nonebot import on_message, on_notice, on_request
+from nonebot.adapters.onebot.v11 import (
+    Adapter,
+    Bot,
+    FriendRequestEvent,
+    GroupMessageEvent,
+    MessageEvent,
+    NoticeEvent,
+)
+from nonebot.log import logger
 
 
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 JMCOMIC = ROOT / ".venv" / "Scripts" / "jmcomic.exe"
-OPTION = ROOT / "option_zip.yml"
+OPTION = ROOT / "config" / "option_zip.yml"
 DOWNLOAD_DIR = ROOT / "downloads"
 NAPCAT_SHARED_DIR = "/app/napcat/shared"
+
+ALERT_CONFIG = ROOT / "config" / "alert_config.json"
+ALERT_CONFIG_LOCAL = ROOT / "config" / "alert_config.local.json"
+QRCODE_PATH = ROOT / "logs" / "napcat-qrcode.png"
+WEBUI_CONFIG = ROOT / "tools" / "napcat-docker" / "config" / "webui.json"
 
 
 def newest_zip(before: set[Path]) -> Path | None:
@@ -76,6 +93,11 @@ driver.register_adapter(Adapter)
 jm = on_message(priority=10, block=False)
 friend_request = on_request(priority=5, block=False)
 
+# 串行化下载：同一时间只允许一个下载+上传任务，避免并发时
+# run_download 开头的 rmtree(downloads) 互删文件、或把 zip 发错人。
+# 后到的请求会自动排队，按 FIFO 依次执行。
+download_lock = asyncio.Lock()
+
 
 @friend_request.handle()
 async def handle_friend_request(bot: Bot, event: FriendRequestEvent):
@@ -96,44 +118,204 @@ async def handle_jm(bot: Bot, event: MessageEvent):
     if album_id is None:
         await jm.finish("用法：/jm 350234")
 
-    await jm.send(f"收到 JM{album_id}，开始下载并打包 zip。")
+    if download_lock.locked():
+        await jm.send(f"收到 JM{album_id}，前面有任务在下载，已排队，请稍候…")
+    else:
+        await jm.send(f"收到 JM{album_id}，开始下载并打包 zip。")
 
-    code, output, zip_file = await run_download(album_id)
-    if code != 0 or zip_file is None:
-        await jm.finish(f"下载失败，退出码 {code}。\n{output}")
+    # 整个“下载 + 上传”过程都持锁：上传读取的是 downloads/zip 里的文件，
+    # 必须等上传完成才放锁，否则下一个任务的 rmtree 会把 zip 删掉。
+    async with download_lock:
+        code, output, zip_file = await run_download(album_id)
+        if code != 0 or zip_file is None:
+            await jm.finish(f"下载失败，退出码 {code}。\n{output}")
 
-    if isinstance(event, GroupMessageEvent):
+        if isinstance(event, GroupMessageEvent):
+            try:
+                upload_path = f"{NAPCAT_SHARED_DIR}/{zip_file.name}"
+                await bot.call_api(
+                    "upload_group_file",
+                    group_id=event.group_id,
+                    file=upload_path,
+                    name=zip_file.name,
+                )
+            except Exception as exc:
+                await jm.finish(
+                    f"JM{album_id} 已打包完成，但上传群文件失败：{exc}\n"
+                    f"文件在本机：{zip_file}"
+                )
+
+            await jm.finish(f"JM{album_id} 已打包并上传：{zip_file.name}")
+
         try:
             upload_path = f"{NAPCAT_SHARED_DIR}/{zip_file.name}"
             await bot.call_api(
-                "upload_group_file",
-                group_id=event.group_id,
+                "upload_private_file",
+                user_id=event.user_id,
                 file=upload_path,
                 name=zip_file.name,
             )
         except Exception as exc:
             await jm.finish(
-                f"JM{album_id} 已打包完成，但上传群文件失败：{exc}\n"
+                f"JM{album_id} 已打包完成，但私聊发送文件失败：{exc}\n"
                 f"文件在本机：{zip_file}"
             )
 
-        await jm.finish(f"JM{album_id} 已打包并上传：{zip_file.name}")
+        await jm.finish(f"JM{album_id} 已打包并私聊发送：{zip_file.name}")
+
+
+# ---------------------------------------------------------------------------
+# 掉线告警：QQ 被踢 / NapCat 断开时发邮件提醒（服务器无人值守场景）
+# 配置放在 alert_config.json（已被 .gitignore 忽略），缺失则只记日志不发信。
+# ---------------------------------------------------------------------------
+
+_alert_lock = asyncio.Lock()
+_last_alert_at = 0.0  # 上次成功发信的 time.monotonic()，0 表示可立即发
+_current_bot: Bot | None = None
+
+
+def load_alert_config() -> dict:
+    """分层读取：先 base(alert_config.json)，再用 local(alert_config.local.json) 覆盖。
+
+    local 不进仓库（已 gitignore），放真实密钥；base 进仓库，只留结构和占位。
+    以 "_" 开头的键视为注释，忽略。
+    """
+    cfg: dict = {}
+    for path in (ALERT_CONFIG, ALERT_CONFIG_LOCAL):
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            cfg.update({k: v for k, v in data.items() if not k.startswith("_")})
+        except Exception as exc:
+            logger.error(f"读取 {path.name} 失败：{exc}")
+    return cfg
+
+
+def webui_login_url(cfg: dict) -> str:
+    base = (cfg.get("webui_url") or "").rstrip("/")
+    if not base:
+        return ""
+    try:
+        token = json.loads(WEBUI_CONFIG.read_text(encoding="utf-8")).get("token", "")
+    except Exception:
+        token = ""
+    return f"{base}?token={token}" if token else base
+
+
+def _send_email_sync(cfg: dict, subject: str, body: str, attachment: Path | None) -> None:
+    msg = EmailMessage()
+    msg["From"] = cfg["smtp_user"]
+    msg["To"] = cfg.get("smtp_to") or cfg["smtp_user"]
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    if attachment and attachment.exists():
+        msg.add_attachment(
+            attachment.read_bytes(),
+            maintype="image",
+            subtype="png",
+            filename=attachment.name,
+        )
+
+    port = int(cfg.get("smtp_port", 465))
+    if port == 465:
+        with smtplib.SMTP_SSL(cfg["smtp_host"], port, timeout=30) as server:
+            server.login(cfg["smtp_user"], cfg["smtp_pass"])
+            server.send_message(msg)
+    else:
+        with smtplib.SMTP(cfg["smtp_host"], port, timeout=30) as server:
+            server.starttls()
+            server.login(cfg["smtp_user"], cfg["smtp_pass"])
+            server.send_message(msg)
+
+
+async def send_offline_alert(reason: str) -> None:
+    cfg = load_alert_config()
+    required = ("smtp_host", "smtp_user", "smtp_pass")
+    if not all(cfg.get(key) for key in required):
+        logger.warning(f"机器人掉线（{reason}），但未配置 alert_config.json，跳过邮件告警。")
+        return
+
+    global _last_alert_at
+    async with _alert_lock:
+        now = time.monotonic()
+        min_interval = float(cfg.get("min_interval_seconds", 1800))
+        if _last_alert_at and now - _last_alert_at < min_interval:
+            logger.info(f"机器人掉线（{reason}），距上次告警过近，跳过本次邮件。")
+            return
+        _last_alert_at = now
+
+    when = time.strftime("%Y-%m-%d %H:%M:%S")
+    login_url = webui_login_url(cfg)
+    body = (
+        f"JMComic QQ 机器人掉线了，需要处理。\n\n"
+        f"时间：{when}\n"
+        f"原因：{reason}\n\n"
+        f"重新登录方式（服务器无屏幕时）：\n"
+        f"1. 浏览器打开 NapCat WebUI：\n   {login_url or '（未配置 webui_url）'}\n"
+        f"2. 在 WebUI 里点重新登录，用手机 QQ 扫码。\n"
+        f"3. 或在服务器上重跑 start_bot_background。\n\n"
+        f"如果本邮件带有二维码附件，可用另一台设备打开后直接扫描。\n"
+    )
+    subject = "⚠️ JMComic QQ机器人掉线，请重新登录"
+    attachment = QRCODE_PATH if QRCODE_PATH.exists() else None
 
     try:
-        upload_path = f"{NAPCAT_SHARED_DIR}/{zip_file.name}"
-        await bot.call_api(
-            "upload_private_file",
-            user_id=event.user_id,
-            file=upload_path,
-            name=zip_file.name,
-        )
+        await asyncio.to_thread(_send_email_sync, cfg, subject, body, attachment)
+        logger.success(f"掉线告警邮件已发送（{reason}）。")
     except Exception as exc:
-        await jm.finish(
-            f"JM{album_id} 已打包完成，但私聊发送文件失败：{exc}\n"
-            f"文件在本机：{zip_file}"
-        )
+        async with _alert_lock:
+            _last_alert_at = 0.0  # 发送失败，允许下次重试
+        logger.error(f"掉线告警邮件发送失败：{exc}")
 
-    await jm.finish(f"JM{album_id} 已打包并私聊发送：{zip_file.name}")
+
+@driver.on_bot_connect
+async def _on_bot_connect(bot: Bot) -> None:
+    global _current_bot, _last_alert_at
+    _current_bot = bot
+    _last_alert_at = 0.0  # 重连后允许下次掉线立即告警
+    logger.success(f"Bot {bot.self_id} connected，掉线监控已就绪。")
+
+
+@driver.on_bot_disconnect
+async def _on_bot_disconnect(bot: Bot) -> None:
+    global _current_bot
+    _current_bot = None
+    await send_offline_alert("OneBot 连接断开（NapCat 退出或反向 WS 断开）")
+
+
+offline_notice = on_notice(priority=1, block=False)
+
+
+@offline_notice.handle()
+async def _on_offline_notice(event: NoticeEvent) -> None:
+    if getattr(event, "notice_type", None) != "bot_offline":
+        return
+    msg = getattr(event, "message", None) or getattr(event, "tag", None) or "QQ 登录已失效"
+    await send_offline_alert(f"收到 bot_offline 通知：{msg}")
+
+
+@driver.on_startup
+async def _start_status_monitor() -> None:
+    asyncio.create_task(_status_monitor_loop())
+
+
+async def _status_monitor_loop() -> None:
+    cfg = load_alert_config()
+    interval = float(cfg.get("poll_interval_seconds", 180))
+    while True:
+        await asyncio.sleep(interval)
+        bot = _current_bot
+        if bot is None:
+            continue
+        try:
+            status = await bot.call_api("get_status")
+        except Exception as exc:
+            await send_offline_alert(f"get_status 调用异常，连接可能已断：{exc}")
+            continue
+        if status is not None and status.get("online") is False:
+            await send_offline_alert("get_status 返回 online=False（QQ 登录态已失效）")
 
 
 if __name__ == "__main__":

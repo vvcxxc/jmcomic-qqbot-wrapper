@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$logFile = Join-Path $PSScriptRoot "logs\jmcomic-bot.log"
+$logFile = Join-Path (Split-Path $PSScriptRoot -Parent) "logs\jmcomic-bot.log"
 
 if (!(Test-Path $logFile)) {
   Write-Host "Log file does not exist yet: $logFile"

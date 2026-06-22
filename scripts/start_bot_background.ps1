@@ -1,13 +1,14 @@
 $ErrorActionPreference = "Stop"
 
-Set-Location $PSScriptRoot
+$root = Split-Path $PSScriptRoot -Parent
+Set-Location $root
 
-$logDir = Join-Path $PSScriptRoot "logs"
-$pidFile = Join-Path $PSScriptRoot "jmcomic-bot.pid"
+$logDir = Join-Path $root "logs"
+$pidFile = Join-Path $logDir "jmcomic-bot.pid"
 $logFile = Join-Path $logDir "jmcomic-bot.log"
 $errFile = Join-Path $logDir "jmcomic-bot.err.log"
-$qrcodePath = Join-Path $PSScriptRoot "napcat-qrcode.png"
-$webuiConfigPath = Join-Path $PSScriptRoot "tools\napcat-docker\config\webui.json"
+$qrcodePath = Join-Path $logDir "napcat-qrcode.png"
+$webuiConfigPath = Join-Path $root "tools\napcat-docker\config\webui.json"
 
 New-Item -ItemType Directory -Force $logDir | Out-Null
 
@@ -65,7 +66,7 @@ $napcat = docker ps -a --filter "name=^/jm-napcat$" --format "{{.Names}}"
 if ($napcat) {
   docker start jm-napcat | Out-Null
 } else {
-  docker compose -f .\docker-compose.napcat.yml up -d
+  docker compose -f .\config\docker-compose.napcat.yml up -d
 }
 
 for ($i = 0; $i -lt 30; $i++) {
@@ -77,13 +78,14 @@ for ($i = 0; $i -lt 30; $i++) {
   }
 }
 
+$configureScript = Join-Path $PSScriptRoot "configure_napcat_onebot.ps1"
 try {
-  .\configure_napcat_onebot.ps1
+  & $configureScript
 } catch {
   Write-Host "NapCat is not logged in. Opening QR code..."
   $credential = Get-NapCatCredential
   Wait-NapCatLogin $credential
-  .\configure_napcat_onebot.ps1
+  & $configureScript
 }
 
 $existing = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue
@@ -98,7 +100,7 @@ $env:PYTHONIOENCODING = "utf-8"
 $process = Start-Process `
   -FilePath ".\.venv\Scripts\python.exe" `
   -ArgumentList ".\qqbot_jm.py" `
-  -WorkingDirectory $PSScriptRoot `
+  -WorkingDirectory $root `
   -RedirectStandardOutput $logFile `
   -RedirectStandardError $errFile `
   -WindowStyle Hidden `

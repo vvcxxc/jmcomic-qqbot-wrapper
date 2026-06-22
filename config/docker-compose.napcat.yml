@@ -7,6 +7,6 @@ services:
       - "6099:6099"
       - "13000:3000"
     volumes:
-      - ./tools/napcat-docker/config:/app/napcat/config
-      - ./tools/napcat-docker/qq:/app/.config/QQ
-      - ./downloads/zip:/app/napcat/shared
+      - ../tools/napcat-docker/config:/app/napcat/config
+      - ../tools/napcat-docker/qq:/app/.config/QQ
+      - ../downloads/zip:/app/napcat/shared
