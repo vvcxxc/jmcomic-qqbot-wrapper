@@ -15,12 +15,16 @@ $errFile = Join-Path $logDir "jmcomic-bot.err.log"
 
 New-Item -ItemType Directory -Force $logDir | Out-Null
 
-# Kill the old Python process listening on 8080
+# Kill ALL qqbot Python processes by command line (catches stale/duplicate
+# interpreters not on 8080 or in the pid file -- a zombie like that caused 403s).
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -like '*qqbot_jm*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+# Backup: anything still on 8080, plus the pid file
 $ids = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue |
   Select-Object -ExpandProperty OwningProcess -Unique
 foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
-
-# Fallback: process recorded in the pid file
 if (Test-Path $pidFile) {
   $oldPid = Get-Content $pidFile | Select-Object -First 1
   if ($oldPid) { Stop-Process -Id ([int]$oldPid) -Force -ErrorAction SilentlyContinue }

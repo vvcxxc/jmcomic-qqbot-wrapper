@@ -1,5 +1,10 @@
 $ErrorActionPreference = "Stop"
 
+# Native mode (NapCatQQ-Desktop): NapCat runs as the Desktop GUI app and manages
+# its own QQ login + reverse WebSocket. This script ONLY starts the Python bot.
+# (Docker-era helpers -- docker compose / configure_napcat_onebot / qrcode -- are
+# no longer used here; kept in the repo only for rollback. See QQBOT_SETUP.md.)
+
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 
@@ -7,92 +12,26 @@ $logDir = Join-Path $root "logs"
 $pidFile = Join-Path $logDir "jmcomic-bot.pid"
 $logFile = Join-Path $logDir "jmcomic-bot.log"
 $errFile = Join-Path $logDir "jmcomic-bot.err.log"
-$qrcodePath = Join-Path $logDir "napcat-qrcode.png"
-$webuiConfigPath = Join-Path $root "tools\napcat-docker\config\webui.json"
 
 New-Item -ItemType Directory -Force $logDir | Out-Null
 
-function Get-NapCatCredential {
-  $token = (Get-Content -Raw $webuiConfigPath | ConvertFrom-Json).token
-  $sha = [Security.Cryptography.SHA256]::Create()
-  $bytes = [Text.Encoding]::UTF8.GetBytes($token + ".napcat")
-  $hash = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") })
-  $login = Invoke-RestMethod `
-    -Method Post `
-    -Uri "http://127.0.0.1:6099/api/auth/login" `
-    -ContentType "application/json" `
-    -Body (@{ hash = $hash } | ConvertTo-Json)
-  return $login.data.Credential
+# Kill ALL existing qqbot Python processes by command line. This catches stale /
+# duplicate interpreters that aren't on 8080 or in the pid file -- such a zombie
+# squatting on 8080 caused 403s during the Desktop migration.
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -like '*qqbot_jm*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+# Backup: anything still listening on 8080, plus the pid file
+$ids = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue |
+  Select-Object -ExpandProperty OwningProcess -Unique
+foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+if (Test-Path $pidFile) {
+  $oldPid = Get-Content $pidFile | Select-Object -First 1
+  if ($oldPid) { Stop-Process -Id ([int]$oldPid) -Force -ErrorAction SilentlyContinue }
 }
 
-function Invoke-NapCatApi($path, $credential) {
-  return Invoke-RestMethod `
-    -Method Post `
-    -Uri "http://127.0.0.1:6099/api/$path" `
-    -Headers @{ Authorization = "Bearer $credential" }
-}
-
-function Wait-NapCatLogin($credential) {
-  $opened = $false
-  while ($true) {
-    $status = Invoke-NapCatApi "QQLogin/CheckLoginStatus" $credential
-    if ($status.data.isLogin) {
-      if (Test-Path $qrcodePath) {
-        Remove-Item -LiteralPath $qrcodePath -Force
-      }
-      Write-Host "QQ logged in. QR code image removed."
-      return
-    }
-
-    if ($status.data.loginError -like "*过期*") {
-      Invoke-NapCatApi "QQLogin/RefreshQRcode" $credential | Out-Null
-      Start-Sleep -Seconds 2
-    }
-
-    docker cp jm-napcat:/app/napcat/cache/qrcode.png $qrcodePath | Out-Null
-    if (-not $opened -and (Test-Path $qrcodePath)) {
-      Start-Process $qrcodePath
-      $opened = $true
-      Write-Host "QQ is not logged in. QR code saved and opened: $qrcodePath"
-      Write-Host "Scan it with QQ, then approve login on your phone."
-    }
-
-    Start-Sleep -Seconds 3
-  }
-}
-
-Write-Host "Starting NapCat container..."
-$napcat = docker ps -a --filter "name=^/jm-napcat$" --format "{{.Names}}"
-if ($napcat) {
-  docker start jm-napcat | Out-Null
-} else {
-  docker compose -f .\config\docker-compose.napcat.yml up -d
-}
-
-for ($i = 0; $i -lt 30; $i++) {
-  try {
-    Invoke-WebRequest -Uri "http://127.0.0.1:6099" -UseBasicParsing -TimeoutSec 2 | Out-Null
-    break
-  } catch {
-    Start-Sleep -Seconds 2
-  }
-}
-
-$configureScript = Join-Path $PSScriptRoot "configure_napcat_onebot.ps1"
-try {
-  & $configureScript
-} catch {
-  Write-Host "NapCat is not logged in. Opening QR code..."
-  $credential = Get-NapCatCredential
-  Wait-NapCatLogin $credential
-  & $configureScript
-}
-
-$existing = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue
-if ($existing) {
-  Write-Host "NoneBot already running on 127.0.0.1:8080."
-  exit 0
-}
+Start-Sleep -Seconds 1
 
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
@@ -107,5 +46,6 @@ $process = Start-Process `
   -PassThru
 
 Set-Content -Path $pidFile -Value $process.Id -Encoding ASCII
-Write-Host "NoneBot started in background. PID=$($process.Id)"
+Write-Host "Python bot started. PID=$($process.Id)"
+Write-Host "Make sure NapCatQQ-Desktop is running and logged in; it reverse-connects within ~30s."
 Write-Host "Log: $logFile"

@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
 
+# Native mode (NapCatQQ-Desktop): this only stops the Python bot.
+# NapCat itself is managed by the Desktop app (stop it there if needed).
+
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 
@@ -20,7 +23,4 @@ foreach ($ownerId in $listeners) {
   Stop-Process -Id $ownerId -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "NoneBot stopped."
-
-docker stop jm-napcat 2>$null | Out-Null
-Write-Host "NapCat container stopped."
+Write-Host "Python bot stopped. (NapCat is managed by NapCatQQ-Desktop.)"

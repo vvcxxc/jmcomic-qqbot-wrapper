@@ -2,6 +2,8 @@
 
 本文档记录在原项目基础上追加 QQ Bot 集成后的运行环境、依赖、启动方式和使用方式，方便换电脑或开启新对话时快速接手。
 
+> **当前运行方案：NapCatQQ-Desktop（Windows 原生 GUI），不使用 Docker。** 本文档已按原生方案为准，Docker 相关内容已移除。
+
 ## 版权与归属说明
 
 原项目不是我们写的，是开源项目：
@@ -22,23 +24,13 @@ https://github.com/hect0x7/JMComic-Crawler-Python
 Python API for JMComic | 提供Python API访问禁漫天堂，同时支持网页端和移动端 | 禁漫天堂GitHub Actions下载器
 ```
 
-原项目信息：
-
-```text
-Author/Repo: hect0x7/JMComic-Crawler-Python
-Language: Python
-License: MIT
-Stars/Forks/Issues: 1182/2673/3
-Last pushed: 2025-03-19T00:17:38
-```
-
-本地这次做的事情只是：在原项目外面额外加了一套 QQ Bot/NapCat/NoneBot 的调用层，让 QQ 消息可以触发原项目的 `jmcomic` 下载能力。
+本地这次做的事情只是：在原项目外面额外加了一套 QQ Bot / NapCat / NoneBot 的调用层，让 QQ 消息可以触发原项目的 `jmcomic` 下载能力。
 
 也就是说：
 
 - 原项目 `JMComic-Crawler-Python` 的核心功能和版权归原作者/原仓库
 - 我们没有把原项目声明成自己的作品
-- 我们只是做了本地二次集成：QQ Bot、启动脚本、Docker/NapCat 配置、zip 下载配置和这份说明文档
+- 我们只是做了本地二次集成：QQ Bot、启动脚本、NapCat 配置、zip 下载配置和这份说明文档
 - 原项目使用 MIT License，继续遵守原许可证
 
 ## 原项目说明
@@ -71,216 +63,252 @@ src\jmcomic
 - 私聊触发：直接私聊发送 zip 文件；失败时回复本机文件路径
 - 自动同意 QQ 好友申请
 - 多个下载任务自动排队、串行执行（详见下文“并发与排队”）
-
-## 本次新增/修改内容
-
-### QQ 机器人相关
-
-```text
-qqbot_jm.py
-requirements-qqbot.txt
-```
-
-`qqbot_jm.py` 是 NoneBot2 机器人入口。
-
-它负责：
-
-- 接收 QQ 消息
-- 识别 `/jm 350234`
-- 调用 `.venv\Scripts\jmcomic.exe`
-- 使用 `option_zip.yml` 下载并打包
-- 群聊上传群文件
-- 私聊发送文件
-- 收到 QQ 好友申请时自动同意
 - 机器人掉线时发邮件告警（详见下文“掉线告警”）
 
-### 掉线告警配置
+## 运行架构
+
+| 部件 | 跑在哪 | 谁来管 |
+|---|---|---|
+| **NapCat**（QQ 协议端，负责登录 + 反向 WebSocket） | NapCatQQ-Desktop 原生程序 | Desktop GUI 自己（起停、定时重启都在它界面里） |
+| **Python 机器人**（`qqbot_jm.py`，接消息、调下载、发文件） | 本机 `.venv` 后台进程 | 本仓库的 `.bat` 脚本 |
+
+两者在**同一台 Windows** 上，NapCat 通过反向 WebSocket 主动连到 Python：
 
 ```text
-config\alert_config.json
-config\alert_config.local.json
+ws://127.0.0.1:8080/onebot/v11/ws
 ```
 
-- `alert_config.json`：进仓库的基础配置，只放结构和默认值，不填真实密钥
-- `alert_config.local.json`：放真实邮箱密钥，已被 `.gitignore` 忽略，不进仓库
-
-详见下文“掉线告警（邮件）”。
-
-### 下载和打包配置
+机器人端口、token 由 `.env` 决定：
 
 ```text
-config\option_zip.yml
+HOST=127.0.0.1
+PORT=8080
+DRIVER=~fastapi
+ONEBOT_ACCESS_TOKEN=jmcomic_local_bot
 ```
 
-作用：
+## 首次配置（换电脑时做一次）
 
-- 指定下载目录为 `downloads`
-- 下载完成后压缩到 `downloads\zip`
-- 删除原图片目录，只保留 zip
+### 1. 安装并运行 NapCatQQ-Desktop
 
-### NapCat / Docker 配置
+安装包已随项目保存在 `installers\`（如 `installers\NapCatQQ-Desktop-2.2.8-x64.msi`，直接双击安装即可，省得重新下载——官方下载偶尔被拦/报风险）。
+
+- 官方地址备用：<https://github.com/NapNeko/NapCatQQ-Desktop>
+- `installers\` 已 gitignore（不进仓库），换电脑时随项目文件夹一起拷贝。
+
+### 2. 启动 NapCat 实例并登录 QQ
+
+在 Desktop 里创建/启动一个 NapCat 实例，**扫码登录 QQ**（正常只登这一次；登录较频繁有被风控的风险，能不重登就不重登）。
+
+### 3. 配置反向 WebSocket（连到机器人）
+
+打开 NapCat WebUI：
 
 ```text
-config\docker-compose.napcat.yml
-scripts\configure_napcat_onebot.ps1
-scripts\configure_napcat_onebot.bat
+http://127.0.0.1:6099/webui
 ```
 
-作用：
+进入 **网络配置 → 新建 → WebSocket 客户端**，启用并填写（**以下值照抄**）：
 
-- 用 Docker 启动 NapCat
-- 把 `downloads\zip` 挂载到容器内 `/app/napcat/shared`
-- 配置 NapCat 反向 WebSocket 连接到 NoneBot：
+| 字段 | 值 |
+|---|---|
+| URL | `ws://127.0.0.1:8080/onebot/v11/ws` |
+| **Token** | **`jmcomic_local_bot`**（必须与 `.env` 里 `ONEBOT_ACCESS_TOKEN` 完全一致，否则机器人返回 403） |
+| messagePostFormat | `array` |
+| reportSelfMessage | `true`（开启） |
+
+保存。配置会写进 Desktop 自己的实例配置文件（形如 `onebot11_<QQ号>.json`），下次开机自动生效。
+
+### 4.（可选）开机自启 / 定时重启
+
+在 Desktop 界面里可开启“开机自启”“定时重启”，无人值守时更稳。
+
+## 启动
+
+确认 NapCatQQ-Desktop 已运行且 QQ 已登录，然后双击根目录的：
 
 ```text
-ws://host.docker.internal:8080/onebot/v11/ws
+start_bot_background.bat
 ```
 
-### 启动/停止/日志脚本
+它**只启动后台 Python 机器人**（不碰 NapCat）。看日志：双击 `tail_bot_log.bat`，出现下面内容即连接成功（NapCat 约 30 秒内反向连上）：
+
+```text
+Bot 3431188215 connected
+connection open
+```
+
+## 停止
+
+双击：
+
+```text
+stop_bot_background.bat
+```
+
+只停后台 Python 机器人。NapCat 不受影响（要停 NapCat 去 Desktop 界面操作）。
+
+## 热重启（改了代码后用）
+
+改了 `qqbot_jm.py` 等 Python 代码后，双击：
+
+```text
+reload_bot.bat
+```
+
+它**只杀掉并重启 Python 进程，完全不碰 NapCat**。所以 **QQ 登录态不受影响、不会弹二维码、不会增加登录次数**（频繁登录有被风控的风险）。NapCat 会在约 30 秒内自动反向重连。
+
+> 启动/热重启脚本都会先按命令行特征杀掉所有残留的 `qqbot_jm` Python 进程，再启动新进程——避免出现僵尸进程占着 8080 端口导致 403 的情况。
+
+## 根目录脚本与实现
 
 为保持根目录整洁，**根目录只放几个常用的双击入口 `.bat`**：
 
 ```text
-start_bot_background.bat   启动全部（NapCat 容器 + Python 机器人）
-stop_bot_background.bat    停止全部（含 docker stop，会停 NapCat 容器）
-reload_bot.bat            热重启：只重启 Python，不碰 NapCat 容器
+start_bot_background.bat   启动后台 Python 机器人
+stop_bot_background.bat    停止后台 Python 机器人
+reload_bot.bat             热重启：只重启 Python
 tail_bot_log.bat           查看实时日志
 ```
 
-它们的具体实现（`.ps1`）和次要脚本都收在 `scripts\` 目录里：
+它们的具体实现（`.ps1`）收在 `scripts\` 目录里：
 
 ```text
 scripts\start_bot_background.ps1
 scripts\stop_bot_background.ps1
 scripts\reload_bot.ps1
 scripts\tail_bot_log.ps1
-scripts\configure_napcat_onebot.ps1
-scripts\configure_napcat_onebot.bat
-scripts\open_napcat_qrcode.bat
 ```
 
 平时只需双击根目录那几个 `.bat`，不用进 `scripts\`。`.bat` 会自动调用 `scripts\` 下对应的 `.ps1`。
 
-**关于 `reload_bot.bat`（热重启）**：改了 `qqbot_jm.py` 等 Python 代码后，用它来应用改动 —— 它**只杀掉并重启 8080 上的 Python 进程，完全不碰 NapCat 容器**。所以 **QQ 登录态不受影响、不会弹二维码、不会增加登录次数**（频繁登录有被风控的风险）。NapCat 会在约 30 秒内自动反向重连。
-只有在确实要重启整个环境（容器本身有问题）时才用 `stop` + `start`。
+> 不要双击 `.ps1`（会被当记事本打开）。一律双击 `.bat`。
 
-### 文档
+## 使用
+
+### 好友申请
+
+机器人收到 QQ 好友申请会自动同意，不需要手动确认。
+
+### 群聊
+
+在群里发送：
 
 ```text
-QQBOT_SETUP.md
+/jm 350234
 ```
 
-就是当前这份文档。
+效果：下载 → 打包 zip → 上传群文件。
 
-## 运行产物
+### 私聊
 
-这些是运行过程中生成的，不属于原项目核心代码：
+私聊机器人发送：
 
 ```text
-.venv
-downloads
-logs
-tools\napcat-docker
+/jm 350234
 ```
 
-说明：
+效果：下载 → 打包 zip → 私聊发送 zip 文件；如果私聊文件发送失败，会回复运行机器人的电脑上的文件路径。
 
-- `.venv` 是 Python 虚拟环境，可以重新创建
-- `downloads` 是下载产物，可以删除
-- `logs` 是机器人日志和运行时文件，可以删除
-- `tools\napcat-docker` 是 NapCat 配置、QQ 登录数据和挂载目录
+> 注意：下载和打包发生在运行机器人的电脑上，不是在发消息的电脑上。
 
-运行时产物都集中在 `logs\` 里，根目录不再散落这些文件：
+## 下载与打包配置
 
-- `logs\jmcomic-bot.pid` 是后台进程 pid 文件，可以删除
-- `logs\napcat-qrcode.png` 是登录二维码临时图片，登录成功后会自动删除
+下载/打包行为由 `config\option_zip.yml` 控制，当前会：
 
-换电脑时，如果想保留 QQ 登录态，可以尝试一起复制：
+- 使用 `api` 客户端
+- 下载到 `downloads`
+- 下载完成后打包到 `downloads\zip`
+- 删除原图片文件夹，只保留 zip
+
+zip 文件名示例：
 
 ```text
-tools\napcat-docker
+JM350234-董卓 上+下.zip
 ```
 
-但 QQ 登录态不一定能跨机器复用。更稳的方式是在新电脑重新扫码登录。
+## 文件上传与文件名处理
 
-## Git/提交建议
-
-如果要提交代码，建议提交：
+NapCat 与机器人在同一台 Windows 上，上传时机器人直接把 zip 的**本机真实路径**转成 `file://` URI 交给 NapCat：
 
 ```text
-README.md
-qqbot_jm.py
-requirements-qqbot.txt
-config\option_zip.yml
-config\docker-compose.napcat.yml
-config\alert_config.json
-docs\
-scripts\
-*.bat
+file:///D:/.../downloads/zip/xxx.zip
 ```
 
-不建议提交：
+之所以用 `file://` 而不是裸路径：NapCat 对 `file` 字段做 `new URL()` 解析，裸路径会报 `识别URL失败 (retcode=1200)`。`shared_file_uri()` 用 `Path.as_uri()` 生成带百分号编码的合法 URI。
+
+上传前 `sanitize_zip_name()` 还会清洗文件名：
+
+1. **过滤特殊字符**：去掉 `♥ 〜 （） ○ ・` 等符号（替换成空格再合并），保留中日文、字母数字、空格和 `[]()-_.`。让文件名更干净，避开个别字符引发的问题。
+2. **按字节截断保险**：整个文件名（含 `.zip`）截断到 **200 字节**以内（车号开头和 `.zip` 一定保留，只截标题尾部），防止超长路径出问题。原生 Windows 下其实很宽松，但留着无妨。
+
+## 并发与排队
+
+所有下载任务**共用同一个 `downloads` 目录**，且每个任务开始时会先清空它（省磁盘）。为避免多个任务同时跑时互相删文件、或把 zip 发错人，机器人用一把全局锁（`qqbot_jm.py` 里的 `download_lock`）把**整个“下载 + 上传”过程串行化**：
+
+- 同一时间只有一个任务在下载/上传
+- 后到的 `/jm` 请求会**自动排队**，按先来后到依次执行
+- 排队中的请求会先收到提示：`前面有任务在下载，已排队，请稍候…`
+
+注意锁会持有到**上传完成**才释放——因为上传读取的是 `downloads\zip` 里的文件，必须等它发完，否则下一个任务的清空会把 zip 删掉。所以单个任务较慢时，后面的人需要多等一会，这是正常现象。
+
+> 不建议为了“加速”改成并行下载：下载是网络/磁盘密集型，并行快不了多少，反而会因为短时间大量请求放大被 QQ 风控的概率。
+
+## 掉线告警（邮件）
+
+机器人在服务器上无人值守时，QQ 登录态被踢、或 NapCat 挂掉都不会有人立刻发现。为此加了一套**邮件告警**：检测到掉线就给你发邮件。
+
+### 触发条件（三重检测）
+
+1. 收到 NapCat 转发的 `bot_offline` 通知（QQ 账号被服务端踢，最常见）
+2. OneBot 反向 WebSocket 断开（NapCat 退出）
+3. 定时轮询 `get_status` 兜底（默认每 180 秒，发现 `online=false` 即告警）
+
+任一触发都会发一封邮件，并带 30 分钟防抖（`min_interval_seconds`），避免短时间内重复轰炸；机器人重新连上后防抖自动复位，下次掉线可立即告警。
+
+### 配置方式（base + local 分层，类似 .env / .env.local 概念）
+
+> 这里的 base/local 是本功能自带的两个 JSON 文件，和 NoneBot 自己的 `.env` 无关。
 
 ```text
-.venv
-downloads
-logs
-tools\napcat-docker
-config\alert_config.local.json
+config\alert_config.json         base：进仓库，只放结构和非密钥默认值
+config\alert_config.local.json   local：不进仓库（已 gitignore），放真实邮箱密钥
 ```
 
-`alert_config.json` 是不含密钥的基础配置，可以提交；`alert_config.local.json` 含真实邮箱授权码，已在 `.gitignore`，不要提交。
+读取规则：先读 base，再用 local **覆盖同名字段**。local 里只需填你要改的字段（一般就是邮箱几项），其余继承 base。两个文件里 `smtp_user`/`smtp_pass` 都为空时，掉线只记日志、**不发邮件**（等于关闭，不报错）。以 `_` 开头的键是注释，程序忽略。
 
-如果仓库要长期维护，建议把这些运行产物加入 `.gitignore`。
+### 启用步骤
 
-## 目录
+1. 打开 `config\alert_config.local.json`，填写：
 
-本文档中的路径默认都相对于“项目根目录”。项目放在哪里都可以，例如：
-
-```text
-C:\Users\xxx\JMComic-Crawler-Python-master
-D:\cms1\JMComic-Crawler-Python-master
+```json
+{
+  "smtp_user": "你的发件邮箱@qq.com",
+  "smtp_pass": "邮箱SMTP授权码(不是登录密码)",
+  "smtp_to": "接收告警的邮箱@qq.com",
+  "webui_url": "http://服务器能被你访问到的IP:6099/webui"
+}
 ```
 
-下载输出目录：
+2. 如果用的不是 QQ 邮箱，再去 `alert_config.json` 里改 `smtp_host` / `smtp_port`（或同样写进 local 覆盖）。常见：QQ `smtp.qq.com:465`、163 `smtp.163.com:465`、Gmail `smtp.gmail.com:587`。
+3. 热重启机器人（`reload_bot.bat`）生效。
+
+授权码说明：QQ/163 邮箱要先在邮箱设置里**开启 SMTP 服务并生成授权码**，填授权码而不是邮箱登录密码。
+
+### 收到告警后怎么重新登录
+
+1. 在 NapCatQQ-Desktop 界面里重新登录，用**手机 QQ 扫码**；
+2. 或打开 NapCat WebUI（`http://IP:6099/webui`）点重新登录扫码。
+
+## 关键文件
 
 ```text
-downloads\zip
-```
-
-机器人日志：
-
-```text
-logs\jmcomic-bot.log
-logs\jmcomic-bot.err.log
-```
-
-所有 PowerShell 命令都建议先进入项目根目录再执行。
-
-## 需要的软件
-
-### 必需
-
-- Windows
-- Python 3.12+
-- Docker Desktop
-- Node.js/npm：当前机器有，但此方案主要依赖 Docker，不强依赖 npm
-- QQ 账号一个，用于登录 NapCat
-
-### 当前已用版本
-
-- Python `3.12.10`
-- Docker Desktop 可用
-- NapCat Docker 镜像：
-
-```text
-mlikiowa/napcat-docker:latest
-```
-
-Python 虚拟环境：
-
-```text
-.venv
+qqbot_jm.py                      机器人代码（入口）
+.env                             机器人端口 + token（ONEBOT_ACCESS_TOKEN=jmcomic_local_bot）
+config\option_zip.yml            JMComic 下载和 zip 配置
+config\alert_config.json         掉线告警 base 配置
+config\alert_config.local.json   掉线告警密钥（gitignore）
+requirements-qqbot.txt           QQ 机器人 Python 依赖
 ```
 
 ## Python 依赖
@@ -297,347 +325,58 @@ QQ 机器人依赖：
 .\.venv\Scripts\python.exe -m pip install -r requirements-qqbot.txt
 ```
 
-主要依赖：
+主要依赖：`jmcomic`、`nonebot2`、`nonebot-adapter-onebot`。当前 Python 版本 `3.12.10`，虚拟环境在 `.venv`。
 
-- `jmcomic`
-- `nonebot2`
-- `nonebot-adapter-onebot`
+## 运行产物
 
-## 关键文件
-
-启动后台机器人：
+这些是运行过程中生成的，不属于原项目核心代码，可删除/可重建：
 
 ```text
-start_bot_background.bat
+.venv         Python 虚拟环境，可重建
+downloads     下载产物，可删
+logs          机器人日志和运行时文件，可删
 ```
 
-一键全停：
-
-```text
-stop_bot_background.bat
-```
-
-查看实时日志：
-
-```text
-tail_bot_log.bat
-```
-
-NapCat Docker 配置：
-
-```text
-config\docker-compose.napcat.yml
-```
-
-机器人代码：
-
-```text
-qqbot_jm.py
-```
-
-JMComic 下载和 zip 配置：
-
-```text
-config\option_zip.yml
-```
-
-NapCat OneBot 自动配置脚本：
-
-```text
-scripts\configure_napcat_onebot.ps1
-```
-
-## 启动
-
-双击：
-
-```text
-start_bot_background.bat
-```
-
-它会自动：
-
-- 启动 NapCat Docker 容器
-- 如果 QQ 未登录，生成并打开二维码图片：
-
-```text
-logs\napcat-qrcode.png
-```
-
-- 等扫码登录成功后删除二维码图片
-- 配置 NapCat 反向 WebSocket 到 NoneBot
-- 启动后台 Python 机器人
-
-如果需要看运行情况，双击：
-
-```text
-tail_bot_log.bat
-```
-
-看到类似下面内容表示连接成功：
-
-```text
-Bot 3431188215 connected
-connection open
-```
-
-## 停止
-
-双击：
-
-```text
-stop_bot_background.bat
-```
-
-会停止：
-
-- 后台 Python 机器人
-- NapCat Docker 容器
-
-## 使用
-
-### 好友申请
-
-机器人收到 QQ 好友申请会自动同意，不需要手动确认。
-
-### 群聊
-
-在群里发送：
-
-```text
-/jm 350234
-```
-
-效果：
-
-- 下载
-- 打包 zip
-- 上传群文件
-
-### 私聊
-
-私聊机器人发送：
-
-```text
-/jm 350234
-```
-
-效果：
-
-- 下载
-- 打包 zip
-- 私聊发送 zip 文件
-- 如果私聊文件发送失败，会回复运行机器人的电脑上的文件路径
-
-注意：下载和打包发生在运行机器人的电脑上，不是在发消息的电脑上。
-
-## 下载配置
-
-当前 `option_zip.yml` 会：
-
-- 使用 `api` 客户端
-- 下载到 `downloads`
-- 下载完成后打包到 `downloads\zip`
-- 删除原图片文件夹，只保留 zip
-
-zip 文件名示例：
-
-```text
-JM350234-董卓 上+下.zip
-```
-
-## 文件名处理
-
-上传前 `qqbot_jm.py` 会对 zip 文件名做处理，解决两类 NapCat 上传报错（都表现为 `retcode=1200`）：
-
-1. **过滤特殊字符**（`sanitize_zip_name`）：去掉 `♥ 〜 （） ○ ・` 等符号（替换成空格再合并），保留中日文、字母数字、`[]()-_.` 和车号。让文件名更干净，也避开个别字符引发的问题。
-2. **按字节截断**：NapCat 跑在 Linux 容器里，单个文件名上限 **255 字节**（中文一字 3 字节），超长会报 `ENAMETOOLONG: name too long`。所以文件名（含 `.zip`）会截断到 **200 字节**以内，车号开头和 `.zip` 一定保留，只截标题尾部。
-3. **用 `file://` URI 上传**（`shared_file_uri`）：NapCat 对 `file` 字段做 `new URL()` 解析，传裸路径 `/app/...` 会 `识别URL失败`。改成合法的 `file://` + 百分号编码后根治。
-
-> 这三步是叠加的：先过滤、再截断、最后用 file:// URI 上传。换电脑/换原生 NapCat（非 Docker，Linux 字节限制变 Windows 字符限制）后第 2 点会宽松很多，但留着无妨。
-
-## 并发与排队
-
-所有下载任务**共用同一个 `downloads` 目录**，且每个任务开始时会先清空它（省磁盘）。为避免多个任务同时跑时互相删文件、或把 zip 发错人，机器人用一把全局锁（`qqbot_jm.py` 里的 `download_lock`）把**整个“下载 + 上传”过程串行化**：
-
-- 同一时间只有一个任务在下载/上传
-- 后到的 `/jm` 请求会**自动排队**，按先来后到依次执行
-- 排队中的请求会先收到提示：`前面有任务在下载，已排队，请稍候…`
-
-注意锁会持有到**上传完成**才释放——因为上传读取的是 `downloads\zip` 里的文件，必须等它发完，否则下一个任务的清空会把 zip 删掉。所以单个任务较慢时，后面的人需要多等一会，这是正常现象。
-
-> 不建议为了“加速”改成并行下载：下载是网络/磁盘密集型，并行快不了多少，反而会因为短时间大量请求放大被 QQ 风控的概率。
-
-## Docker 挂载
-
-`config\docker-compose.napcat.yml` 把本机 zip 目录挂进容器（compose 在 `config\` 子目录里，所以是 `../`）：
-
-```text
-../downloads/zip:/app/napcat/shared
-```
-
-机器人上传文件时使用容器内路径：
-
-```text
-/app/napcat/shared/xxx.zip
-```
-
-这是必须的，因为 NapCat 在 Docker 里，不能直接识别 Windows 路径。
-
-## 掉线告警（邮件）
-
-机器人在服务器上无人值守时，QQ 登录态被踢、或 NapCat 挂掉都不会有人立刻发现。为此加了一套**邮件告警**：检测到掉线就给你发邮件，并附上重新登录用的 WebUI 地址和二维码。
-
-### 触发条件（三重检测）
-
-1. 收到 NapCat 转发的 `bot_offline` 通知（QQ 账号被服务端踢，最常见）
-2. OneBot 反向 WebSocket 断开（NapCat 进程退出 / 容器停了）
-3. 定时轮询 `get_status` 兜底（默认每 180 秒，发现 `online=false` 即告警）
-
-任一触发都会发一封邮件，并带 30 分钟防抖（`min_interval_seconds`），避免短时间内重复轰炸；机器人重新连上后防抖自动复位，下次掉线可立即告警。
-
-### 配置方式（base + local 分层，类似 .env / .env.local 概念）
-
-> 注意：这里的 base/local 是本功能自带的两个 JSON 文件，和 NoneBot 自己的 `.env` 无关。
-
-- `alert_config.json`（base）：**进仓库**。只放结构、注释和非密钥默认值（SMTP 端口、轮询间隔等）。迁移到新机器后看这个文件就知道要配什么。
-- `alert_config.local.json`（local）：**不进仓库**（已在 `.gitignore`）。放真实邮箱密钥。
-
-读取规则：先读 base，再用 local **覆盖同名字段**。local 里只需填你要改的字段（一般就是邮箱几项），其余继承 base。两个文件里 `smtp_user`/`smtp_pass` 都为空时，掉线只记日志、**不发邮件**（功能等于关闭，不会报错）。
-
-以 `_` 开头的键是注释，程序会忽略。
-
-### 启用步骤
-
-1. 打开 `config\alert_config.local.json`，填写：
-
-```json
-{
-  "smtp_user": "你的发件邮箱@qq.com",
-  "smtp_pass": "邮箱SMTP授权码(不是登录密码)",
-  "smtp_to": "接收告警的邮箱@qq.com",
-  "webui_url": "http://服务器能被你访问到的IP:6099/webui"
-}
-```
-
-2. 如果用的不是 QQ 邮箱，再去 `alert_config.json` 里改 `smtp_host` / `smtp_port`（或同样写进 local 覆盖）。常见：QQ `smtp.qq.com:465`、163 `smtp.163.com:465`、Gmail `smtp.gmail.com:587`。
-3. 重启机器人（`stop_bot_background.bat` → `start_bot_background.bat`）生效。
-
-授权码说明：QQ/163 邮箱要先在邮箱设置里**开启 SMTP 服务并生成授权码**，填授权码而不是邮箱登录密码。
-
-### 收到告警后怎么重新登录（服务器无屏幕）
-
-邮件里会给出 NapCat WebUI 地址（自动拼好 token，形如 `http://IP:6099/webui?token=xxxx`）：
-
-1. 在任意一台能上网的设备用浏览器打开这个地址
-2. 在 WebUI 里点重新登录，用**手机 QQ 扫码**
-3. 或者直接在服务器上重跑 `start_bot_background`
-
-如果掉线时 `logs\` 目录已有 `napcat-qrcode.png`，邮件会把它作为附件一起发出，可用另一台设备打开后直接扫。
-
-## 常见问题
-
-### 双击 ps1 变成记事本
-
-不要双击 `.ps1`。
-
-双击 `.bat`：
-
-```text
-start_bot_background.bat
-stop_bot_background.bat
-tail_bot_log.bat
-```
-
-### 发消息没反应
-
-先看日志：
-
-```text
-tail_bot_log.bat
-```
-
-确认有：
-
-```text
-Bot ... connected
-connection open
-```
-
-如果没有，重新双击：
-
-```text
-start_bot_background.bat
-```
-
-如果弹二维码，扫码登录。
-
-### 上传失败，提示识别 URL 失败
-
-说明 NapCat 收到了 Windows 路径而不是容器路径。
-
-当前代码已经修为 `/app/napcat/shared/xxx.zip`。如果换电脑后出现，检查：
-
-```text
-config\docker-compose.napcat.yml
-qqbot_jm.py
-```
-
-### 私聊只返回本机路径
-
-说明 `upload_private_file` 接口失败。文件仍在：
-
-```text
-downloads\zip
-```
-
-### 群文件上传失败
-
-检查机器人账号是否有该群上传文件权限，或者文件是否过大。
-
-### 重新登录
-
-如果 QQ 登录掉了，启动脚本会自动打开：
-
-```text
-logs\napcat-qrcode.png
-```
-
-扫码后继续。
+`logs\jmcomic-bot.pid` 是后台进程 pid 文件；机器人日志在 `logs\jmcomic-bot.log` / `logs\jmcomic-bot.err.log`。
 
 ## 换电脑步骤
 
 1. 安装 Python 3.12+
-2. 安装 Docker Desktop 并启动
-3. 进入项目根目录
-4. 创建虚拟环境：
+2. 拷贝整个项目文件夹（含 `installers\`）到新电脑
+3. 进入项目根目录，创建虚拟环境并装依赖：
 
 ```powershell
 python -m venv .venv
-```
-
-5. 安装依赖：
-
-```powershell
 .\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\python.exe -m pip install -r requirements-qqbot.txt
 ```
 
-6. 拉取 NapCat 镜像：
+4. 安装并配置 NapCatQQ-Desktop（见上文“首次配置”：装 `installers\` 里的安装包 → 扫码登录 → 配反向 WS，token 填 `jmcomic_local_bot`）
+5. 双击 `start_bot_background.bat`
+6. 群聊或私聊发 `/jm 350234` 测试
 
-```powershell
-docker pull mlikiowa/napcat-docker:latest
-```
+## 常见问题
 
-7. 双击启动：
+### 发消息没反应
 
-```text
-start_bot_background.bat
-```
+先看日志 `tail_bot_log.bat`，确认有 `Bot ... connected` 和 `connection open`。没有就：
 
-8. 扫码登录 QQ
-9. 群聊或私聊发送：
+- 确认 NapCatQQ-Desktop 在运行且 QQ 在线；
+- 确认 WebUI 里反向 WS 客户端是“已连接”状态、token 是 `jmcomic_local_bot`；
+- 双击 `reload_bot.bat` 重启 Python。
 
-```text
-/jm 350234
-```
+### 返回 403
+
+机器人和 NapCat 的 token 不一致。检查 `.env` 的 `ONEBOT_ACCESS_TOKEN` 与 Desktop WebUI 里反向 WS 的 token 是否都为 `jmcomic_local_bot`。也可能是残留的旧 Python 进程占着 8080——`reload_bot.bat` 会清掉再重启。
+
+### 上传失败 / 识别 URL 失败
+
+当前代码用 `file://` URI 上传（`shared_file_uri`）。若换电脑后出现，检查 `qqbot_jm.py` 中 `shared_file_uri` 是否仍返回 `(DOWNLOAD_DIR/"zip"/name).as_uri()`，以及 zip 是否真的在 `downloads\zip` 下。
+
+### 私聊只返回本机路径
+
+说明 `upload_private_file` 接口失败。文件仍在 `downloads\zip`。
+
+### 群文件上传失败
+
+检查机器人账号是否有该群上传文件权限，或文件是否过大。

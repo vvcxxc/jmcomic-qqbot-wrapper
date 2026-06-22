@@ -9,7 +9,6 @@ import sys
 import time
 from email.message import EmailMessage
 from pathlib import Path
-from urllib.parse import quote
 
 import nonebot
 from nonebot import on_message, on_notice, on_request
@@ -29,7 +28,6 @@ PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 JMCOMIC = ROOT / ".venv" / "Scripts" / "jmcomic.exe"
 OPTION = ROOT / "config" / "option_zip.yml"
 DOWNLOAD_DIR = ROOT / "downloads"
-NAPCAT_SHARED_DIR = "/app/napcat/shared"
 
 ALERT_CONFIG = ROOT / "config" / "alert_config.json"
 ALERT_CONFIG_LOCAL = ROOT / "config" / "alert_config.local.json"
@@ -60,10 +58,10 @@ def parse_jm_id(text: str) -> str | None:
 
 
 def shared_file_uri(name: str) -> str:
-    """NapCat 对 file 字段做 new URL() 解析：裸路径在长名/带符号时会
-    "识别URL失败 (retcode=1200)"。改成合法的 file:// URI 并对路径百分号编码，
-    完整文件名（含 ♥〜（）等字符）都能正常上传。"""
-    return "file://" + quote(f"{NAPCAT_SHARED_DIR}/{name}")
+    """Desktop(原生)模式：NapCat 与机器人在同一台 Windows 上，直接用 zip 的
+    本机真实路径生成 file:// URI（Path.as_uri() 自带百分号编码），交给 NapCat 读取。
+    传裸路径会被 NapCat 的 new URL() 解析成 "识别URL失败 (retcode=1200)"，故用 file://。"""
+    return (DOWNLOAD_DIR / "zip" / name).as_uri()
 
 
 # 上传前清洗文件名：去掉 ♥ 〜 （） ○ ・ 等符号，并截断到文件系统能接受的长度。

@@ -169,3 +169,4 @@ gemini.md
 logs/
 tools/
 config/alert_config.local.json
+installers/
