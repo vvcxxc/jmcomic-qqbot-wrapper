@@ -9,6 +9,7 @@ import sys
 import time
 from email.message import EmailMessage
 from pathlib import Path
+from urllib.parse import quote
 
 import nonebot
 from nonebot import on_message, on_notice, on_request
@@ -56,6 +57,37 @@ def newest_zip(before: set[Path]) -> Path | None:
 def parse_jm_id(text: str) -> str | None:
     match = re.search(r"(?:jm)?\s*(\d{3,})", text, flags=re.IGNORECASE)
     return match.group(1) if match else None
+
+
+def shared_file_uri(name: str) -> str:
+    """NapCat 对 file 字段做 new URL() 解析：裸路径在长名/带符号时会
+    "识别URL失败 (retcode=1200)"。改成合法的 file:// URI 并对路径百分号编码，
+    完整文件名（含 ♥〜（）等字符）都能正常上传。"""
+    return "file://" + quote(f"{NAPCAT_SHARED_DIR}/{name}")
+
+
+# 上传前清洗文件名：去掉 ♥ 〜 （） ○ ・ 等符号，并截断到文件系统能接受的长度。
+# 保留中日文、字母数字、空格和 []()-_. 安全字符，其余替换成空格再合并。
+_SAFE_FILENAME_PUNCT = set(" -_[]().")
+# NapCat 在 Linux 容器里 open() 文件，单个文件名上限 255 字节(UTF-8)，
+# 超长会报 ENAMETOOLONG。留余量，整个文件名(含 .zip)最长 200 字节。
+_MAX_NAME_BYTES = 200
+
+
+def sanitize_zip_name(name: str, album_id: str) -> str:
+    stem = name[:-4] if name.lower().endswith(".zip") else name
+    cleaned = "".join(
+        ch if (ch.isalnum() or ch in _SAFE_FILENAME_PUNCT) else " "
+        for ch in stem
+    )
+    cleaned = " ".join(cleaned.split()).strip()
+    if not cleaned:
+        cleaned = f"JM{album_id}"
+    # 按 UTF-8 字节截断（给 ".zip" 留 4 字节），不切断多字节字符
+    budget = _MAX_NAME_BYTES - len(b".zip")
+    if len(cleaned.encode()) > budget:
+        cleaned = cleaned.encode()[:budget].decode("utf-8", errors="ignore").rstrip()
+    return f"{cleaned}.zip"
 
 
 async def run_download(album_id: str) -> tuple[int, str, Path | None]:
@@ -130,9 +162,15 @@ async def handle_jm(bot: Bot, event: MessageEvent):
         if code != 0 or zip_file is None:
             await jm.finish(f"下载失败，退出码 {code}。\n{output}")
 
+        # 先清洗文件名去掉特殊字符，再用 file:// URI 上传（双保险）。
+        safe_name = sanitize_zip_name(zip_file.name, album_id)
+        if zip_file.name != safe_name:
+            zip_file = zip_file.rename(zip_file.with_name(safe_name))
+
+        upload_path = shared_file_uri(zip_file.name)
+
         if isinstance(event, GroupMessageEvent):
             try:
-                upload_path = f"{NAPCAT_SHARED_DIR}/{zip_file.name}"
                 await bot.call_api(
                     "upload_group_file",
                     group_id=event.group_id,
@@ -148,7 +186,6 @@ async def handle_jm(bot: Bot, event: MessageEvent):
             await jm.finish(f"JM{album_id} 已打包并上传：{zip_file.name}")
 
         try:
-            upload_path = f"{NAPCAT_SHARED_DIR}/{zip_file.name}"
             await bot.call_api(
                 "upload_private_file",
                 user_id=event.user_id,

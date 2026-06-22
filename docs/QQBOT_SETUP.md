@@ -138,12 +138,13 @@ ws://host.docker.internal:8080/onebot/v11/ws
 
 ### 启动/停止/日志脚本
 
-为保持根目录整洁，**根目录只放 3 个常用的双击入口 `.bat`**：
+为保持根目录整洁，**根目录只放几个常用的双击入口 `.bat`**：
 
 ```text
-start_bot_background.bat
-stop_bot_background.bat
-tail_bot_log.bat
+start_bot_background.bat   启动全部（NapCat 容器 + Python 机器人）
+stop_bot_background.bat    停止全部（含 docker stop，会停 NapCat 容器）
+reload_bot.bat            热重启：只重启 Python，不碰 NapCat 容器
+tail_bot_log.bat           查看实时日志
 ```
 
 它们的具体实现（`.ps1`）和次要脚本都收在 `scripts\` 目录里：
@@ -151,13 +152,17 @@ tail_bot_log.bat
 ```text
 scripts\start_bot_background.ps1
 scripts\stop_bot_background.ps1
+scripts\reload_bot.ps1
 scripts\tail_bot_log.ps1
 scripts\configure_napcat_onebot.ps1
 scripts\configure_napcat_onebot.bat
 scripts\open_napcat_qrcode.bat
 ```
 
-平时只需双击根目录那 3 个 `.bat`，不用进 `scripts\`。`.bat` 会自动调用 `scripts\` 下对应的 `.ps1`。
+平时只需双击根目录那几个 `.bat`，不用进 `scripts\`。`.bat` 会自动调用 `scripts\` 下对应的 `.ps1`。
+
+**关于 `reload_bot.bat`（热重启）**：改了 `qqbot_jm.py` 等 Python 代码后，用它来应用改动 —— 它**只杀掉并重启 8080 上的 Python 进程，完全不碰 NapCat 容器**。所以 **QQ 登录态不受影响、不会弹二维码、不会增加登录次数**（频繁登录有被风控的风险）。NapCat 会在约 30 秒内自动反向重连。
+只有在确实要重启整个环境（容器本身有问题）时才用 `stop` + `start`。
 
 ### 文档
 
@@ -440,6 +445,16 @@ zip 文件名示例：
 ```text
 JM350234-董卓 上+下.zip
 ```
+
+## 文件名处理
+
+上传前 `qqbot_jm.py` 会对 zip 文件名做处理，解决两类 NapCat 上传报错（都表现为 `retcode=1200`）：
+
+1. **过滤特殊字符**（`sanitize_zip_name`）：去掉 `♥ 〜 （） ○ ・` 等符号（替换成空格再合并），保留中日文、字母数字、`[]()-_.` 和车号。让文件名更干净，也避开个别字符引发的问题。
+2. **按字节截断**：NapCat 跑在 Linux 容器里，单个文件名上限 **255 字节**（中文一字 3 字节），超长会报 `ENAMETOOLONG: name too long`。所以文件名（含 `.zip`）会截断到 **200 字节**以内，车号开头和 `.zip` 一定保留，只截标题尾部。
+3. **用 `file://` URI 上传**（`shared_file_uri`）：NapCat 对 `file` 字段做 `new URL()` 解析，传裸路径 `/app/...` 会 `识别URL失败`。改成合法的 `file://` + 百分号编码后根治。
+
+> 这三步是叠加的：先过滤、再截断、最后用 file:// URI 上传。换电脑/换原生 NapCat（非 Docker，Linux 字节限制变 Windows 字符限制）后第 2 点会宽松很多，但留着无妨。
 
 ## 并发与排队
 
