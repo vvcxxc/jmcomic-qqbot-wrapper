@@ -7,6 +7,7 @@ import smtplib
 import subprocess
 import sys
 import time
+import zipfile
 from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote
@@ -90,6 +91,20 @@ def sanitize_zip_name(name: str, album_id: str) -> str:
     return f"{cleaned}.zip"
 
 
+def make_group_pack(inner_zip: Path, album_id: str) -> Path:
+    """群文件容易被和谐：在内层 zip 外再套一层，外层文件名只用 JM+车号、不含漫画名，
+    降低被关键词/内容扫描命中的概率。内层 zip 原样塞进去（解压后还是原文件名）。
+    内层已是压缩包，外层用 ZIP_STORED 不二次压缩，省时间、体积不变。
+    外层写在 downloads/zip 下（即挂载进容器的目录），上传时用容器路径即可读取。"""
+    outer = inner_zip.with_name(f"JM{album_id}.zip")
+    # 标题为空时 sanitize 也会得到 JMxxxx.zip，避免外层名与内层名相撞
+    if outer == inner_zip:
+        outer = inner_zip.with_name(f"JM{album_id}_pack.zip")
+    with zipfile.ZipFile(outer, "w", zipfile.ZIP_STORED) as zf:
+        zf.write(inner_zip, arcname=inner_zip.name)
+    return outer
+
+
 async def run_download(album_id: str) -> tuple[int, str, Path | None]:
     if DOWNLOAD_DIR.exists():
         shutil.rmtree(DOWNLOAD_DIR)
@@ -170,20 +185,22 @@ async def handle_jm(bot: Bot, event: MessageEvent):
         upload_path = shared_file_uri(zip_file.name)
 
         if isinstance(event, GroupMessageEvent):
+            # 群文件易被和谐：再套一层，外层只用 JM+车号命名（不含漫画名）后上传。
+            pack = await asyncio.to_thread(make_group_pack, zip_file, album_id)
             try:
                 await bot.call_api(
                     "upload_group_file",
                     group_id=event.group_id,
-                    file=upload_path,
-                    name=zip_file.name,
+                    file=shared_file_uri(pack.name),
+                    name=pack.name,
                 )
             except Exception as exc:
                 await jm.finish(
                     f"JM{album_id} 已打包完成，但上传群文件失败：{exc}\n"
-                    f"文件在本机：{zip_file}"
+                    f"文件在本机：{pack}"
                 )
 
-            await jm.finish(f"JM{album_id} 已打包并上传：{zip_file.name}")
+            await jm.finish(f"JM{album_id} 已打包并上传：{pack.name}")
 
         try:
             await bot.call_api(
