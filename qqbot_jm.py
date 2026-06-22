@@ -7,11 +7,11 @@ import smtplib
 import subprocess
 import sys
 import time
-import zipfile
 from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote
 
+import pyzipper
 import nonebot
 from nonebot import on_message, on_notice, on_request
 from nonebot.adapters.onebot.v11 import (
@@ -92,15 +92,19 @@ def sanitize_zip_name(name: str, album_id: str) -> str:
 
 
 def make_group_pack(inner_zip: Path, album_id: str) -> Path:
-    """群文件容易被和谐：在内层 zip 外再套一层，外层文件名只用 JM+车号、不含漫画名，
-    降低被关键词/内容扫描命中的概率。内层 zip 原样塞进去（解压后还是原文件名）。
-    内层已是压缩包，外层用 ZIP_STORED 不二次压缩，省时间、体积不变。
+    """群文件容易被和谐：QQ 会把上传的 zip 解开扫描内容，普通压缩包（哪怕套几层）
+    都防不住——它读得到里面的图。改用 AES 加密压缩包：QQ 解不开、读不到内容，
+    就不会拦下载。外层文件名只用 JM+车号，解压密码 = 车号（机器人会在群里回出来）。
+    内层已是压缩包，ZIP_STORED 不二次压缩。
     外层写在 downloads/zip 下（即挂载进容器的目录），上传时用容器路径即可读取。"""
     outer = inner_zip.with_name(f"JM{album_id}.zip")
     # 标题为空时 sanitize 也会得到 JMxxxx.zip，避免外层名与内层名相撞
     if outer == inner_zip:
         outer = inner_zip.with_name(f"JM{album_id}_pack.zip")
-    with zipfile.ZipFile(outer, "w", zipfile.ZIP_STORED) as zf:
+    with pyzipper.AESZipFile(
+        outer, "w", compression=pyzipper.ZIP_STORED, encryption=pyzipper.WZ_AES
+    ) as zf:
+        zf.setpassword(album_id.encode())
         zf.write(inner_zip, arcname=inner_zip.name)
     return outer
 
@@ -200,7 +204,9 @@ async def handle_jm(bot: Bot, event: MessageEvent):
                     f"文件在本机：{pack}"
                 )
 
-            await jm.finish(f"JM{album_id} 已打包并上传：{pack.name}")
+            await jm.finish(
+                f"JM{album_id} 已上传：{pack.name}\n解压密码：{album_id}"
+            )
 
         try:
             await bot.call_api(
